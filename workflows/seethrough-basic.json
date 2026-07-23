@@ -39,6 +39,21 @@
           "links": [
             17
           ]
+        },
+        {
+          "name": "layer_images",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "layer_alpha",
+          "type": "MASK",
+          "links": null
+        },
+        {
+          "name": "layer_names",
+          "type": "STRING",
+          "links": null
         }
       ],
       "properties": {

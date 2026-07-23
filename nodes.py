@@ -288,6 +288,68 @@ def _make_preview(tag2pinfo, resolution):
     return torch.from_numpy(preview).unsqueeze(0)
 
 
+def _make_layer_outputs(tag2pinfo, frame_size):
+    """Convert cropped RGBA parts to synchronized ComfyUI output lists.
+
+    Every layer is restored to the original processing canvas so all IMAGE and
+    MASK items have the same dimensions.  ComfyUI masks use transparency
+    semantics (0 = opaque, 1 = transparent), matching Load Image and
+    Join Image with Alpha.
+    """
+    canvas_h, canvas_w = (int(frame_size[0]), int(frame_size[1]))
+    sorted_tags = sorted(
+        tag2pinfo.keys(),
+        key=lambda tag: tag2pinfo[tag].get("depth_median", 1),
+        reverse=True,
+    )
+
+    layer_images = []
+    layer_masks = []
+    layer_names = []
+
+    for tag in sorted_tags:
+        pinfo = tag2pinfo[tag]
+        img = pinfo.get("img")
+        if img is None or img.ndim != 3 or img.shape[-1] not in (3, 4):
+            print(f"[SeeThrough] Skipping invalid layer output '{tag}'", flush=True)
+            continue
+
+        img_h, img_w = img.shape[:2]
+        xyxy = pinfo.get("xyxy", [0, 0, img_w, img_h])
+        x1, y1, x2, y2 = [int(v) for v in xyxy]
+
+        # Limit both destination and source ranges. This also safely handles
+        # parts whose bounding boxes extend outside the processing canvas.
+        dst_x1 = max(0, x1)
+        dst_y1 = max(0, y1)
+        dst_x2 = min(canvas_w, x2, x1 + img_w)
+        dst_y2 = min(canvas_h, y2, y1 + img_h)
+
+        rgba_canvas = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
+        if dst_x2 > dst_x1 and dst_y2 > dst_y1:
+            src_x1 = dst_x1 - x1
+            src_y1 = dst_y1 - y1
+            src_x2 = src_x1 + (dst_x2 - dst_x1)
+            src_y2 = src_y1 + (dst_y2 - dst_y1)
+
+            source = np.clip(img, 0, 255).astype(np.uint8, copy=False)
+            if source.shape[-1] == 3:
+                source = np.concatenate(
+                    [source, np.full((*source.shape[:2], 1), 255, dtype=np.uint8)],
+                    axis=-1,
+                )
+            rgba_canvas[dst_y1:dst_y2, dst_x1:dst_x2] = source[src_y1:src_y2, src_x1:src_x2]
+
+        rgb = rgba_canvas[..., :3].astype(np.float32) / 255.0
+        alpha_mask = 1.0 - rgba_canvas[..., 3].astype(np.float32) / 255.0
+
+        layer_images.append(torch.from_numpy(rgb).unsqueeze(0))
+        layer_masks.append(torch.from_numpy(alpha_mask).unsqueeze(0))
+        layer_names.append(tag)
+
+    return layer_images, layer_masks, layer_names
+
+
 class SeeThrough_LoadLayerDiffModel:
     @classmethod
     def INPUT_TYPES(s):
@@ -762,8 +824,16 @@ class SeeThrough_PostProcess:
             },
         }
 
-    RETURN_TYPES = ("SEETHROUGH_PARTS", "IMAGE")
-    RETURN_NAMES = ("parts", "preview")
+    RETURN_TYPES = ("SEETHROUGH_PARTS", "IMAGE", "IMAGE", "MASK", "STRING")
+    RETURN_NAMES = ("parts", "preview", "layer_images", "layer_alpha", "layer_names")
+    OUTPUT_IS_LIST = (False, False, True, True, True)
+    OUTPUT_TOOLTIPS = (
+        "Internal layer data used by SeeThrough Save PSD.",
+        "Composite preview of all processed layers.",
+        "One full-canvas RGB IMAGE per layer, ordered from back to front.",
+        "Transparency mask paired with each layer image (0 = opaque, 1 = transparent).",
+        "Semantic tag paired with each layer image.",
+    )
     FUNCTION = "process"
     CATEGORY = "SeeThrough"
 
@@ -871,7 +941,8 @@ class SeeThrough_PostProcess:
             print(f"  - {tag}: depth_median={dm:.4f}" if isinstance(dm, float) else f"  - {tag}", flush=True)
 
         preview = _make_preview(tag2pinfo, resolution)
-        return (parts_data, preview)
+        layer_images, layer_masks, layer_names = _make_layer_outputs(tag2pinfo, frame_size)
+        return (parts_data, preview, layer_images, layer_masks, layer_names)
 
 
 class SeeThrough_SavePSD:

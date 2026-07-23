@@ -14,6 +14,7 @@ Paper: [arxiv:2602.03749](https://arxiv.org/abs/2602.03749) (Conditionally accep
 - **PSD Export** — Download layered PSD files directly from the browser (frontend ag-psd, no Python dependency)
 - **Depth PSD** — Separate depth PSD export for 3D/parallax workflows
 - **Preview Output** — Blended reconstruction preview as a standard ComfyUI IMAGE output
+- **Per-Layer Outputs** — Send every processed layer to downstream ComfyUI nodes as synchronized IMAGE, MASK, and name lists
 - **HuggingFace Auto-Download** — Models download automatically from HuggingFace on first use
 - **VRAM Optimization** — Tag embedding caching, text encoder unloading, group offload, and configurable depth resolution for low-VRAM GPUs
 
@@ -23,7 +24,9 @@ Paper: [arxiv:2602.03749](https://arxiv.org/abs/2602.03749) (Conditionally accep
 |------|-------------|
 | **SeeThrough Load LayerDiff Model** | Load the LayerDiff SDXL pipeline (layer generation) |
 | **SeeThrough Load Depth Model** | Load the Marigold depth estimation pipeline |
-| **SeeThrough Decompose** | Full pipeline: LayerDiff + Marigold depth + post-processing |
+| **SeeThrough Generate Layers** | Decompose the input into raw semantic RGBA layers |
+| **SeeThrough Generate Depth** | Estimate per-layer depth maps |
+| **SeeThrough Post Process** | Final splitting/cropping with per-layer IMAGE, alpha MASK, and layer-name outputs |
 | **SeeThrough Save PSD** | Save layers as PNGs + metadata; download PSD via browser button |
 
 ## Installation
@@ -86,12 +89,14 @@ Both **Load LayerDiff Model** and **Load Depth Model** expose an `auto_download`
 
 ### Basic Workflow
 
-1. Add **SeeThrough Load LayerDiff Model** and **SeeThrough Load Depth Model** nodes
-2. Add a **SeeThrough Decompose** node — connect both models and a **Load Image** node
-3. Add **SeeThrough Save PSD** — connect the `parts` output
-4. Add **Preview Image** — connect the `preview` output
-5. Run the workflow
-6. Click **Download PSD** button on the Save PSD node to generate and download the PSD file
+1. Add **SeeThrough Load LayerDiff Model** and **SeeThrough Load Depth Model**
+2. Connect **Load Image** → **SeeThrough Generate Layers** → **SeeThrough Generate Depth** → **SeeThrough Post Process**
+3. Connect `layer_images` from **SeeThrough Post Process** to any node that accepts `IMAGE`
+4. When transparency is needed, connect the matching `layer_alpha` output to the node's `MASK`/alpha input
+5. Optionally connect `parts` to **SeeThrough Save PSD**, or `preview` to **Preview Image**
+6. Run the workflow
+
+`layer_images`, `layer_alpha`, and `layer_names` are synchronized ComfyUI lists. A downstream node is run once for each layer, with the image, transparency mask, and semantic name at the same list index. Each image is restored to the full processing canvas so layers can also be recombined without losing their position. The order is back-to-front.
 
 ### Example Workflows
 
